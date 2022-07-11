@@ -1,0 +1,233 @@
+## Titanic competition in Kaggle
+## V1 : only single ML-algorithm applies.
+## Download data from Kaggle.
+import pandas
+from sklearn.model_selection import train_test_split
+import numpy as np
+
+train = pandas.read_csv('titanic_train.csv')
+train.columns  
+'''
+Index(['PassengerId', 'Survived', 'Pclass', 'Name', 'Sex', 'Age', 'SibSp',
+       'Parch', 'Ticket', 'Fare', 'Cabin', 'Embarked'],
+      dtype='object')
+'''  
+X = train.drop('Survived',axis=1)
+y = (train.copy())['Survived']
+# Split the (training) data to train and test
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=4686)
+
+# missing values in X_train
+np.sum(X_train.isna(), axis=0)
+
+# Of 668, Age missing 140 Cabin 514 Embarked 2
+# Treat missing values: Age: means by groups. 
+# Embarked: mode by PClass
+
+# Cabin: correlated with Pclass?  
+Cabin_Pclass = (X_train.loc[X_train['Cabin'].notna(),:])[{'Cabin','Pclass'}]
+
+# It seems that F and G-cabins are of 2 or 3 classes. However, not definitely.
+# The Pclass variable should be able to cover Cabin.
+
+from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.pipeline import Pipeline
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.compose import ColumnTransformer
+from sklearn.metrics import classification_report
+from sklearn.model_selection import cross_val_score, RandomizedSearchCV, GridSearchCV
+from sklearn.preprocessing import StandardScaler
+
+Impute1 = SimpleImputer(strategy="mean", add_indicator= True)
+Impute2 = SimpleImputer(strategy="most_frequent")
+Encode = OneHotEncoder(handle_unknown="ignore")
+Scale = StandardScaler()
+
+Embarked = ['Embarked']
+Cat_attribs = ['Name','Sex','Cabin', 'Ticket']
+Age = ['Age']
+Num_attribs = ['Fare']
+
+num_pipiline1 = Pipeline(steps=[
+    ('impute1',Impute1),
+    ('scale1', StandardScaler())
+])
+
+num_pipiline2 = Pipeline(steps=[
+    ('scale1', StandardScaler())
+])
+
+cat_pipeline1 = Pipeline(steps=[
+    ('impute2', Impute2),
+    ('enco', Encode)
+])
+
+cat_pipeline2 = Pipeline(steps=[ 
+    ('encode', Encode)
+])
+
+total_pipeline = ColumnTransformer(transformers=[
+    ('num_imp', num_pipiline1, Age),
+    ('num_scale', num_pipiline2, Num_attribs),
+    ('cat_imp', cat_pipeline1, Embarked),
+    ('cat_encode', cat_pipeline2, Cat_attribs)
+], remainder="passthrough")
+
+'''
+Logistic regression model.
+'''
+Logit = Pipeline(steps=[ 
+    ('preprocess', total_pipeline),
+    ('logit', LogisticRegression(penalty='l2', C=1, max_iter=1000, solver="liblinear") )
+]
+)
+
+titanic_logit = Logit.fit(X_train, y_train)
+
+titanic_pred = Logit.predict(X_train)
+
+print(classification_report(y_train, titanic_pred))
+# accuracy 0.93
+cross_logit = cross_val_score(Logit, X_train, y_train, cv=5)
+np.mean(cross_logit)
+# ~ 0.81
+
+
+dist = {
+    'logit__C': range(0,1000,100), 
+    'logit__penalty': ['l2','l1']
+}
+
+clf = RandomizedSearchCV(Logit, param_distributions=dist, n_iter=10, cv=3)
+
+clf.fit(X_train, y_train)
+
+pred_lg2 = clf.predict(X_train)
+print(classification_report(y_train, pred_lg2))
+# 1 !!
+
+cross_lg2 = cross_val_score(clf, X_train, y_train, cv=5)
+np.mean(cross_lg2)
+# 0.82 ~ 0.83 Overfitting.
+
+'''
+Support Vector Machine
+'''
+from sklearn.svm import SVC
+
+svc = Pipeline(steps=[ 
+    ('preprocess', total_pipeline),
+    ('svm', SVC(C=1, kernel="rbf"))
+])
+
+titan_svc = svc.fit(X_train, y_train)
+pred_svc = svc.predict(X_train)
+print(classification_report(y_train, pred_svc))
+## Bad accuracy ~0.6. Probably not worth random search.
+
+'''
+dist_svc= { 
+    "svm__C": range(1, 1000, 100),
+    "svm__kernel": ['linear', 'poly', 'rbf', 'sigmoid', 'precomputed']
+}
+
+svc_chosen = RandomizedSearchCV(svc, param_distributions=dist_svc, n_iter=50, random_state=4686)
+svc_chosen.fit(X_train, y_train)
+
+# svc_chosen.best_params_
+#{'svm__kernel': 'linear', 'svm__C': 1}
+# It takes 57 minutes. n*m*log_2(m)
+'''
+svc_chosen = Pipeline(steps=[ 
+    ('preprocess', total_pipeline),
+    ('svm', SVC(C=1, kernel="linear"))
+])
+
+svc_chosen.fit(X_train, y_train)
+pred_svc_rs = svc_chosen.predict(X_train)
+print(classification_report(y_train, pred_svc_rs))
+# 1 
+print(classification_report(y_test, svc_chosen.predict(X_test)))
+#0.82
+
+'''
+Random Forest
+'''
+
+random_forest = Pipeline(steps=[ 
+    ('preprocess', total_pipeline),
+    ('rf', RandomForestClassifier(criterion="entropy", min_samples_leaf=1, random_state=4686))
+])
+
+titan_rf = random_forest.fit(X_train, y_train)
+pred_rf = random_forest.predict(X_train)
+print(classification_report(y_train, pred_rf))
+# 1
+
+cross_rf = cross_val_score(random_forest, X_train, y_train, cv=5)
+np.mean(cross_rf)
+# ~0.82. 
+
+# Evaluate different methods on own created X_test.
+#Logistic Regression clf
+pred_test_clf = clf.predict(X_test)
+print(classification_report(y_test, pred_test_clf))
+
+# Random Forest
+pred_test_rf = random_forest.predict(X_test)
+print(classification_report(y_test, pred_test_rf))
+#0.83
+
+# K-Nearest Neighbours
+from sklearn.neighbors import KNeighborsClassifier
+
+knc = Pipeline(steps=[ 
+    ('preprocess', total_pipeline),
+    ('knclf', KNeighborsClassifier())
+])
+
+knc.fit(X_train, y_train)
+pred_knc = knc.predict(X_train)
+print(classification_report(y_train, pred_knc))
+#0.72
+
+disc_knc = {
+    "knclf__n_neighbors": range(0,100,5),
+    "knclf__weights":['uniform','distance']
+}
+
+knc_grid = RandomizedSearchCV(knc, param_distributions=disc_knc, cv=50, random_state=4686)
+
+knc_grid.fit(X_train, y_train)
+# knc_grid.best_params_ 95, distance
+pred_knc_grid = knc_grid.predict(X_train)
+print(classification_report(y_train, pred_knc_grid))
+# 1
+
+cross_knc = cross_val_score(knc_grid, X_train, y_train)
+np.mean(cross_knc, 0)
+# ~ 0.6. knc_grid much overfitting.
+
+print(classification_report(y_test, knc_grid.predict(X_test)))
+#0.6
+
+#Apply the random forest algorithm to the true test data
+## The score is 0.76315
+
+test = pandas.read_csv('titanic_test.csv')
+# pred_test = random_forest.predict(test)
+# Error: "Fare" has a missing value, in contrast to X_train and X_test.
+
+Fare = test['Fare'].to_numpy().reshape(1,-1)
+Fare_ny = Impute1.fit_transform(Fare)
+
+test['Fare'] = Fare_ny.reshape(-1,1)
+pred_test = random_forest.predict(test)
+
+res1 = (test.copy())['PassengerId']
+result = (pandas.DataFrame(res1)).assign(Survived = pred_test)
+result.to_csv('submission.csv',index=False)
+
+## 
